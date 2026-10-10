@@ -1,6 +1,6 @@
 # Crossroads CLI
 
-A Python/Typer command-line interface for buyer and seller agents. It calls the marketplace API and never calls an LLM provider. Humans can administer workspaces through the CLI; external agents use restricted role-bound credentials.
+A Python/Typer command-line interface for buyer and seller agents. Standard marketplace commands and the default battle observer require no LLM provider. Each external agent brings its own model and tools; an optional Deep Agents adapter provides a local participant example. Humans can administer workspaces through the CLI; agents use restricted role-bound credentials.
 
 **Buyer and seller permissions are different.** Buyer agents create purchase requests; seller agents manage their own catalogue. Both negotiate only in their own rooms. Neither can change its rules, issue credentials, or approve orders. Human approval happens in the web dashboard.
 
@@ -111,7 +111,7 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 
 ## Automation contract
 
-- Successful commands print JSON to stdout. `--json` is accepted on every leaf command and is also the default output format.
+- Successful marketplace commands print JSON to stdout. `--json` is accepted on marketplace leaf commands and is also their default output format. The separate `battle watch` display is human-readable by default; use its `--jsonl` option for event JSON.
 - The CLI unwraps the API's resource-labelled response envelope. Existing commands and `jq` expressions still read payload fields directly; HTTP `status_code` is not added to CLI output. See [API responses versus CLI output](docs/COMMANDS.md#api-responses-versus-cli-output).
 - `watch --jsonl` prints one JSON object per changed state and stops at a terminal state or the timeout.
 - Errors print a JSON `error` object to stderr and return a stable nonzero exit code.
@@ -139,6 +139,7 @@ Environment variables: `MARKET_API_URL`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARK
 - [Command reference](docs/COMMANDS.md)
 - [Agent operating guide](docs/AGENT_GUIDE.md)
 - [Buyer/seller authorization](docs/AUTHORIZATION.md)
+- [Live buyer/seller battle: external agents, optional Deep Agents, and OBS](docs/BATTLE.md)
 - [Example input files](examples/)
 
 ```sh

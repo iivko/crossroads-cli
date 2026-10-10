@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import typer
 
+from .battle.commands import app as battle
 from .client import Client, CLIError, read_config, save_profile
 
 app = typer.Typer(
@@ -34,6 +35,7 @@ agent = typer.Typer(help="Instructions, work discovery and turn claims for any a
 approvals = typer.Typer(help="Read approval status or open human review. CLI tokens cannot approve.")
 orders = typer.Typer(help="Inspect your workspace's confirmed orders and evidence.")
 for name, group in [
+    ("battle", battle),
     ("auth", auth),
     ("workspace", workspace),
     ("credentials", credentials),

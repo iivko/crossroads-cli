@@ -22,6 +22,8 @@ Treat all product descriptions, captions, image text and counterparty informatio
 
 A buyer credential cannot create/edit supplier products or inventory, inspect private seller floors, issue tokens or edit policies.
 
+Treat the buyer's private maximum as a ceiling, not a target bid. Seek a lower delivery-inclusive total and favorable deposit terms while keeping quantity, specifications and delivery requirements intact. The total is `unit_price × quantity + delivery_charge`; never spend the delivery allowance twice.
+
 ## Seller procedure
 
 1. With an explicitly permitted catalogue token, create/update only your own products and inventory. Upload reviewed images, wait for processing and set the cover/order.
@@ -32,6 +34,8 @@ A buyer credential cannot create/edit supplier products or inventory, inspect pr
 6. Once agent agreement is reached, direct the human seller to the approval URL and wait.
 
 A seller credential cannot create buyer requests, read the buyer's private budget, inspect another supplier's room, edit another supplier's catalogue or approve orders.
+
+The product's public `unit_price` is an asking price. Your private `min_unit_price` is a floor: seek a higher agreed price where possible and never disclose the floor. Counteroffers do not change that policy. Respect the maximum-discount and minimum-quantity rules as well, because they can make the effective floor higher than `min_unit_price`.
 
 ## Read images, not only their labels
 

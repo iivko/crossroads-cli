@@ -1,1 +1,1 @@
-"""Provider-neutral CLI. This package never calls an LLM provider."""
+"""Provider-neutral marketplace CLI with an optional bring-your-own-model battle adapter."""

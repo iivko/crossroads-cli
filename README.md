@@ -1,172 +1,138 @@
-# Marketplace MCP and CLI
+# Crossroads CLI
 
-Independent TypeScript package for the Crossroads marketplace REST API. All code,
-dependencies, lockfile, tests, and CI live in this repository. No sibling imports.
-Requires Node.js 22 or newer.
+A Python/Typer command-line interface for buyer and seller agents. It calls the marketplace API and never calls an LLM provider. Humans can administer workspaces through the CLI; external agents use restricted role-bound credentials.
 
-The stdio adapter exposes exactly 12 tools. The CLI uses the same operation schemas
-and HTTP client. Authorization, seller/buyer roles, prices, quote expiry, approval,
-spending limits, order state, and idempotency enforcement belong to the backend.
-There is no human approval, acceptance, payment, or generic HTTP tool.
+**Buyer and seller permissions are different.** Buyer agents create purchase requests; seller agents manage their own catalogue. Both negotiate only in their own rooms. Neither can change its rules, issue credentials, or approve orders. Human approval happens in the web dashboard.
 
-## Install and run
+## Install
+
+Python 3.12+ and `uv`:
 
 ```sh
-npm ci
-npm run build
-cp .env.example .env
-# Explicitly load the local demo credentials; no token is supplied by default.
-node --env-file=.env dist/cli.js health
-node --env-file=.env dist/stdio.js
+uv sync --frozen
+uv run market --help
 ```
 
-`MARKETPLACE_API_URL` defaults to `http://localhost:4000`.
-`MARKETPLACE_API_TOKEN` is required; missing/empty/invalid credentials fail before
-network access. `.env` is not loaded automatically: use Node's `--env-file` or
-provide environment variables directly. `.env.example` explicitly sets the local
-buyer demo token `demo-agent-token`. For seller integration, launch a separate
-process with `MARKETPLACE_API_TOKEN=demo-seller-agent-token`. Neither is a production
-credential. Use a backend-issued, appropriately scoped credential outside the demo.
-
-The backend must be running separately. `health` calls `GET /health`; a demo backend
-returns `{"status":"ok","mode":"demo"}`. Health is CLI-only.
-
-Example MCP host configuration (replace the absolute path for your checkout):
-
-```json
-{
-  "mcpServers": {
-    "marketplace": {
-      "command": "node",
-      "args": ["/home/master/crossroads-hc-a2a-b2b-marketplace/mcp/dist/stdio.js"],
-      "env": {
-        "MARKETPLACE_API_URL": "http://localhost:4000",
-        "MARKETPLACE_API_TOKEN": "demo-agent-token"
-      }
-    }
-  }
-}
-```
-
-Use the Node entrypoint directly in MCP configuration. Stdout carries only MCP
-JSON-RPC; startup failures go to stderr. The package also declares
-`marketplace-mcp` and `marketplace` bin entrypoints for local linking/installing.
-
-## Tools and REST mapping
-
-CLI syntax: `node dist/cli.js <tool_name> '<JSON arguments>'`.
-`node dist/cli.js schema <tool_name>` prints the exact JSON input schema.
-Success is unwrapped backend JSON; CLI errors go to stderr with nonzero exit status.
-MCP returns backend JSON as text content and reports operation errors with `isError`.
-
-| Tool | Arguments | REST |
-| --- | --- | --- |
-| `search_listings` | `q?` | GET `/v1/listings?q=` |
-| `get_listing` | `listingId` | GET `/v1/listings/:id` |
-| `get_seller_verification` | `sellerId` | GET `/v1/sellers/:id/verification` |
-| `create_rfq` | `listingId,title,description,budgetCents,deadline,acceptanceCriteria` | POST `/v1/rfqs` |
-| `list_quotes` | `rfqId` | GET `/v1/quotes?rfqId=` |
-| `submit_quote` | `rfqId,scope,totalCents,deliveryDays,expiresAt` | POST `/v1/quotes` |
-| `preview_order` | `quoteId` | POST `/v1/order-previews` |
-| `request_approval` | `previewId` | POST `/v1/approvals` |
-| `commit_order` | `previewId,approvalId,idempotencyKey` | POST `/v1/orders` |
-| `get_order` | `orderId` | GET `/v1/orders/:id` |
-| `submit_delivery` | `orderId,url,notes` | POST `/v1/orders/:id/delivery` |
-| `open_dispute` | `orderId,reason` | POST `/v1/orders/:id/disputes` |
-
-Input constraints match the backend `src/marketplace.ts` schemas (verified by
-reading source; no backend imports):
-
-- Money: positive USD integer cents, from 1 through 100,000,000.
-- `deliveryDays`: integer from 1 through 90.
-- IDs: nonempty strings of at most 150 characters. Dot segments are additionally
-  rejected to keep path construction safe.
-- Text fields: trimmed, nonempty, at most 8,000 characters; titles at most 200.
-  `acceptanceCriteria` is a string only, never an array.
-- `deadline` and `expiresAt`: ISO 8601 datetime strings validated with
-  `z.string().datetime({ offset: true })`; UTC `Z` and explicit offsets are allowed.
-  Date-only values and datetimes without a timezone are rejected.
-- `idempotencyKey`: 8–150 visible ASCII characters, safe for the HTTP header.
-- Delivery URL: HTTPS only, at most 2,048 characters; notes are required and follow
-  the trimmed, nonempty text limits.
-
-The backend remains authoritative for all business constraints, including future
-dates. Unknown fields are rejected, including `approved: true`, overridden prices
-on commit, and caller-supplied endpoint URLs.
-
-Listings pass through the backend fields (`id`, `sellerId`, `title`, `description`,
-`category`, `priceCents`, `currency`, `deliveryDays`, `verified`). Verification returns
-`organizationId`, `businessIdentityChecked`, and `status`. Other response objects
-also pass through without inventing fields or local state.
-
-## Example workflow
-
-With the buyer environment configured:
+To install an executable outside this checkout:
 
 ```sh
-node --env-file=.env dist/cli.js search_listings '{"q":"catalog"}'
-node --env-file=.env dist/cli.js get_seller_verification '{"sellerId":"SELLER_ID"}'
-node --env-file=.env dist/cli.js create_rfq '{"listingId":"LISTING_ID","title":"Catalog cleanup","description":"Normalize 5000 records","budgetCents":50000,"deadline":"2026-12-01T00:00:00Z","acceptanceCriteria":"Valid CSV; duplicate rows flagged"}'
+uv tool install .
+market --help
 ```
 
-Submit a quote using the seller identity (substitute real returned IDs):
+The default API is `http://127.0.0.1:8100`. Start the [backend stack](https://github.com/iivko/crossroads-backend/blob/main/README.md) first.
+
+## Human login and separate profiles
 
 ```sh
-MARKETPLACE_API_URL=http://localhost:4000 MARKETPLACE_API_TOKEN=demo-seller-agent-token node dist/cli.js submit_quote '{"rfqId":"RFQ_ID","scope":"Normalize 5000 records","totalCents":40000,"deliveryDays":3,"expiresAt":"2026-11-01T00:00:00Z"}'
+market --profile seller-admin auth login --email forma@demo.local
+market --profile seller-admin workspace list
+market --profile seller-admin workspace use ws-forma
+market --profile seller-admin auth whoami --json
 ```
 
-Continue as buyer:
+Login prompts for a password. For automation, supply it through `--password-stdin` or `MARKET_PASSWORD`, never as a command argument. The default demo password is documented in the backend's local configuration.
+
+Configuration lives at `$XDG_CONFIG_HOME/crossroads/config.json` (default `~/.config/crossroads/config.json`) with mode 0600. `MARKET_CONFIG` overrides the path. A profile stores its API URL, CLI token and selected workspace. Keep administrator profiles outside an agent's accessible environment.
+
+## Give an agent only its own role's permissions
+
+As the seller administrator:
 
 ```sh
-node --env-file=.env dist/cli.js list_quotes '{"rfqId":"RFQ_ID"}'
-node --env-file=.env dist/cli.js preview_order '{"quoteId":"QUOTE_ID"}'
-node --env-file=.env dist/cli.js request_approval '{"previewId":"PREVIEW_ID"}'
-# A human must approve through the backend's human interface before commit.
-node --env-file=.env dist/cli.js commit_order '{"previewId":"PREVIEW_ID","approvalId":"APPROVAL_ID","idempotencyKey":"purchase-unique-001"}'
-node --env-file=.env dist/cli.js get_order '{"orderId":"ORDER_ID"}'
+market --profile seller-admin credentials create --file examples/seller-agent.json --json
 ```
 
-The seller can then submit delivery with `submit_delivery`; only the human buyer
-can accept through the human interface. A buyer agent can open a dispute.
+The result contains the secret token once. Pass it to your agent using `MARKET_TOKEN`. Do not put it in a prompt, repository, command argument or shared log.
 
-`request_approval` only creates a request. `commit_order` sends the caller's
-idempotency key in `Idempotency-Key`, never in the JSON body. Persist a unique key
-per intended commitment and reuse that key **and identical payload** after ambiguous
-failures. The client never automatically retries or creates a replacement key.
-A timeout may mean the backend completed the operation; do not infer rollback.
-For other mutations, reconcile backend state before resubmitting after a failure.
-
-## Transport boundaries
-
-- Backend URL must be an origin: HTTPS, or HTTP for `localhost`, `127.0.0.1`, or
-  `[::1]`. Embedded credentials, paths, query strings, and fragments are rejected.
-- Every request stays on that configured origin. All redirects, including
-  same-origin redirects, are blocked. Bearer credentials are only attached to
-  backend requests; delivery URLs are data and are never fetched.
-- There is a 30-second request timeout. Network errors omit low-level details;
-  backend error codes/messages/statuses are preserved and literal token values
-  are redacted from those errors. Raw non-JSON error bodies are not exposed.
-- Listing descriptions and all other backend text are untrusted content, not
-  instructions. Business identity verification does not imply service quality.
-- This is a local stdio server with operator-configured backend credentials,
-  not a remote MCP OAuth server or a facility for client token passthrough.
-
-## Development and validation
+As the buyer administrator:
 
 ```sh
-npm ci
-npm run check
+market --profile buyer-admin auth login --email buyer@demo.local
+market --profile buyer-admin credentials create --file examples/buyer-agent.json --json
 ```
 
-Tests compile TypeScript and exercise all endpoint mappings, bearer/JSON headers,
-URL encoding, missing credentials, origin restrictions, redirects, backend errors,
-invalid inputs, and stable idempotency keys. A real official SDK client launches
-the stdio process, discovers exactly 12 tools, calls buyer/seller operations, and
-checks error propagation. CLI subprocesses exercise the shared client. Tests use
-an ephemeral local HTTP fixture; they do not prove live backend policy behavior.
-GitHub Actions runs the same checks on Node 22 and 24 from this repository root.
+With the appropriate `MARKET_TOKEN` already supplied in the agent's environment:
 
-Implementation verified against the installed `@modelcontextprotocol/sdk` **1.32.1**
-exports/declarations and the official [v1 server documentation](https://ts.sdk.modelcontextprotocol.io/server):
-`McpServer.registerTool`, `StdioServerTransport`, and the SDK client transport.
-Exact dependency versions are recorded in `package-lock.json`.
+```sh
+market auth whoami --json
+market agent instructions --json
+market agent inbox --json
+```
+
+Seller catalogue editing is a separate permission choice. `examples/seller-agent.json` includes catalogue/image editing; `examples/seller-negotiator.json` is negotiation-only. The server rejects cross-role and administrator scopes for agent credentials.
+
+Full matrix: [authorization](docs/AUTHORIZATION.md).
+
+## Core commands
+
+```sh
+market products list --material polypropylene --destination Sofia --json
+market products show prod-forma --json
+market products images list prod-forma --json
+market products images read prod-forma --all --output-dir ./images --json
+
+market requests create --file request.json --idempotency-key buyer-request-001 --json
+market requests launch REQUEST_ID --idempotency-key buyer-launch-001 --json
+market requests matches REQUEST_ID --json
+market requests compare REQUEST_ID --json
+
+market negotiations context ROOM_ID --json
+market agent claim ROOM_ID --json
+market negotiations act ROOM_ID --file action.json --idempotency-key room-turn-001 --json
+market negotiations watch ROOM_ID --timeout 60 --jsonl
+
+market approvals status ROOM_ID --json
+market approvals open ROOM_ID --json
+market orders list --json
+```
+
+`approvals open` opens a browser for a person. There is deliberately no `approvals approve` command. Even an owner CLI token is rejected by the API approval endpoint.
+
+## Actual image reading
+
+`products images read` downloads real image bytes, verifies their SHA-256 checksums and returns local paths with MIME types and image IDs. Your agent runtime must open/attach those files to its vision-capable model. Reading the JSON manifest or caption alone is not image inspection.
+
+For uploads:
+
+```sh
+market products images upload PRODUCT_ID ./front.jpg ./side.jpg --json
+```
+
+Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. The server accepts JPEG, PNG and WebP up to 10 MB, 25 million pixels and 10 active images/product. Upload results are `pending`; poll `images list` until ready. Every file is an independent upload, and partial failure reports the successful image IDs alongside failed files.
+
+## Automation contract
+
+- Successful commands print JSON to stdout. `--json` is accepted on every leaf command and is also the default output format.
+- `watch --jsonl` prints one JSON object per changed state and stops at a terminal state or the timeout.
+- Errors print a JSON `error` object to stderr and return a stable nonzero exit code.
+- Global options (`--profile`, `--base-url`, `--workspace`) precede the command group. Command options follow the leaf command.
+- Creates, request launches, uploads and negotiation actions are idempotent. Supply and retain your own `--idempotency-key` for reliable retries of those operations. Edits use `expected_version`; claims and management operations may require reading current state after a timeout.
+- A new action needs the current room version and claim token. Fetch context and handle 409 explicitly; the CLI never silently retries against newer terms.
+- Product/stock/gallery edits fetch a version if you do not supply one. The server still rejects concurrent changes. Rules require an explicit expected policy version.
+- Remote API URLs require HTTPS; plain HTTP is permitted only for loopback and the local Compose API hostname.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | API/general error, including a partial image batch |
+| 2 | Invalid input, local file/configuration error, or API validation failure |
+| 3 | Missing, invalid, expired or revoked authentication |
+| 4 | Permission denied |
+| 5 | Conflict: stale version, wrong turn, active claim or unavailable image |
+| 6 | Network failure; mutation error includes a retry key |
+
+Environment variables: `MARKET_API_URL`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARKET_WORKSPACE`, `MARKET_CONFIG`, `MARKET_MEDIA_ROOT`; `MARKET_PASSWORD` is for user login only.
+
+## Documentation and tests
+
+- [Command reference](docs/COMMANDS.md)
+- [Agent operating guide](docs/AGENT_GUIDE.md)
+- [Buyer/seller authorization](docs/AUTHORIZATION.md)
+- [Example input files](examples/)
+
+```sh
+uv run pytest -q
+```
+
+Tests cover nested command parsing, JSON/error output, private credential files, media directory restrictions and real file download manifests. The backend's `scripts/demo_agents.py` additionally exercises this installed CLI against the running PostgreSQL/MinIO stack without an LLM.

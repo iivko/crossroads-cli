@@ -1,0 +1,12 @@
+{
+  "title": "80 stackable chairs",
+  "description": "80 chairs for our Sofia office",
+  "quantity": 80,
+  "material": "polypropylene",
+  "stackable": true,
+  "destination": "Sofia",
+  "latest_delivery": "2026-10-24",
+  "max_total": 700000,
+  "max_deposit_percent": 40,
+  "preference": "lower_deposit"
+}

@@ -1,0 +1,21 @@
+[project]
+name = "crossroads-market-cli"
+version = "0.1.0"
+description = "Provider-neutral CLI for the Crossroads B2B marketplace"
+requires-python = ">=3.12"
+dependencies = ["typer>=0.15,<1", "httpx>=0.28,<1"]
+[project.scripts]
+market = "market_cli.main:main"
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["market_cli"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+[tool.ruff]
+line-length = 110
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

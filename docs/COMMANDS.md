@@ -115,14 +115,19 @@ The sample request file uses an illustrative date. Replace it before use, or gen
 | `negotiations context ROOM` | Permitted next actions, private own-side limits and public facts |
 | `agent instructions` | Schemas, role permissions and operating guidance |
 | `agent inbox` | Discover rooms and whether this role can act |
+| `agent watch [--timeout SECONDS] [--interval SECONDS] --jsonl` | Watch changed inbox snapshots, including private human requests; default timeout 60 seconds |
 | `agent claim ROOM` | Acquire a short turn lease |
 | `negotiations act ROOM --file FILE` | Submit a structured action |
 | `negotiations watch ROOM [--timeout SECONDS] [--interval SECONDS] --jsonl` | Observe persisted state changes; default timeout 60 seconds |
 | `negotiations retry ROOM` | Buyer user starts a new bounded attempt after decline, expiry or escalation |
 
-An action document includes `type`, `expected_version`, `claim_token`, and action-specific fields. Propose/counter require `terms`; accept requires `offer_id`; clarifications require a topic (`specifications`, `delivery`, `images`, `quantity`). Decline and human review take no terms/topic/offer ID. Extra fields and arbitrary model-generated reasoning are rejected.
+An action document includes `type`, `expected_version`, `claim_token`, and action-specific fields. When own-role `human_guidance` contains a pending instruction, also send its `id` as `guidance_id`. The successful action marks it applied; a missing or outdated ID is rejected. Omit `guidance_id` when there is no pending instruction. Propose/counter require `terms`; accept requires `offer_id`; clarifications require a topic (`specifications`, `delivery`, `images`, `quantity`). Decline and human review take no terms/topic/offer ID. Extra fields and arbitrary model-generated reasoning are rejected.
 
-Lease expiry defaults to 180 seconds. There is no automatic lease renewal. If inference outlasts the lease, fetch context and reclaim the turn; the backend rejects the old claim. Never accept your own offer. The first proposal and invalidated-offer revisions belong to the seller.
+Lease expiry defaults to 180 seconds. There is no automatic lease renewal. If inference outlasts the lease, fetch context and reclaim the turn; the backend rejects the old claim. Never accept your own offer. Normal first proposals and invalidated-offer revisions belong to the seller; a buyer can propose when its human has requested a new attempt and the context allows it. Always follow `allowed_actions`.
+
+`agent watch` emits the first inbox snapshot, then only changed snapshots, as one JSON object per line. It continues until its timeout even if current rooms await approval, so it can discover new `pending_guidance_id` values. The timeout is 1–3600 seconds; the polling interval is 1–30 seconds. Runtimes may repeat bounded watches within their own time/cost limits. No model is started by this command.
+
+The dashboard's **Negotiate more** action is browser-only. It privately instructs that human's role and starts a new bounded negotiation attempt, invalidating existing approvals and turn claims. There is no CLI command for agents to create those instructions. An external runtime must keep watching or be restarted to act on queued guidance. See [human instructions](AGENT_GUIDE.md#human-instructions-and-another-attempt).
 
 ## Approval, orders and audit
 

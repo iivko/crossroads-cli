@@ -111,3 +111,33 @@ def test_remote_plain_http_rejected():
 
     with pytest.raises(CLIError, match="Remote API connections require HTTPS"):
         Client("http://example.com")
+
+
+def test_agent_watch_reports_changed_inbox_and_human_request_with_bounded_polling(monkeypatch, tmp_path):
+    import copy
+
+    monkeypatch.setenv("MARKET_CONFIG", str(tmp_path / "config.json"))
+    now = [0.0]
+    calls = []
+    initial = {"items": [{"id": "room", "version": 1, "can_act": False, "pending_guidance_id": None}]}
+    requested = copy.deepcopy(initial)
+    requested["items"][0].update(version=2, can_act=True, pending_guidance_id="own-guidance")
+    replies = iter([initial, initial, requested])
+
+    def api(self, method, path, **kwargs):
+        calls.append((method, path))
+        return next(replies)
+
+    monkeypatch.setattr(Client, "call", api)
+    monkeypatch.setattr("market_cli.main.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("market_cli.main.time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    result = runner.invoke(app, ["agent", "watch", "--timeout", "5", "--interval", "2", "--jsonl"])
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line) for line in result.stdout.splitlines()] == [initial, requested]
+    assert calls == [("GET", "/agent/inbox")] * 3
+    assert now[0] == 5
+
+
+def test_agent_watch_validates_polling_limits():
+    for args in (["--timeout", "0"], ["--timeout", "3601"], ["--interval", "0.1"]):
+        assert runner.invoke(app, ["agent", "watch", *args]).exit_code == 2

@@ -209,6 +209,42 @@ the exact terms in the dashboard. Stock is committed only through the existing
 validated order/approval flow. A decline, expiry or human-review request is a
 valid outcome; the demo does not force an agreement.
 
+### Follow dashboard requests to negotiate more
+
+Either human can choose **Negotiate more**, enter a private tactic or objective,
+and queue another bounded attempt for its own agent. This resets approvals and
+claims and gives that role the next turn. The instruction is available only in
+that participant's context. Public battle feeds show a generic human-request
+event and the resulting offers, never the instruction text.
+
+By default the observer and optional Deep Agents adapter still finish at the
+first agreement, decline, expiry or human-review request. Opt in to waiting:
+
+```bash
+market battle run --config "$BATTLE_CONFIG" --wait-for-guidance
+
+# For a previously started battle:
+market battle resume --config "$BATTLE_CONFIG" --wait-for-guidance
+
+# Optional participant controller, configured with your own models:
+market battle resume --config "$BATTLE_CONFIG" --mode deepagents --wait-for-guidance
+```
+
+The flag waits through those states until a human starts a new run or the existing
+wall-clock limit expires. Ordered and cancelled rooms always stop the controller.
+It does not reset the model-call budget, and waiting itself uses no model calls.
+An external observer cannot restart an external LLM process: keep each participant
+running with `market agent watch --timeout 60 --interval 2 --jsonl`, or restart
+your runtime against the existing room. The dashboard queues work and never
+starts or configures the participant's provider by itself.
+
+Participating runtimes must read their own `human_guidance` and acknowledge the
+latest pending ID as `guidance_id` in the next valid action. The optional adapter
+does this automatically after checking fresh version, run and guidance. Its
+pending-action journal retains the ID when replaying an uncertain submission.
+Human tactics cannot override private floors, budget ceilings or other server
+limits. See the [agent protocol](AGENT_GUIDE.md#human-instructions-and-another-attempt).
+
 ## Optional: run the Deep Agents example
 
 Install the optional participant adapter from the CLI repository:

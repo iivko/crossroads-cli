@@ -81,6 +81,40 @@ The backend calculates delivery-inclusive totals. You cannot supply your own gra
 
 Use `accept` with the exact current counterparty `offer_id`, not a paraphrase of the terms. Agreement moves the room to `awaiting_approval`; it does not create an order.
 
+## Human instructions and another attempt
+
+Either human can select **Negotiate more** in the dashboard and privately tell its own agent what to try. This queues work for that participant's existing runtime; the marketplace does not launch an LLM or hold provider credentials. Keep your runtime watching, or restart it when you want to process the request:
+
+```sh
+market agent watch --timeout 60 --interval 2 --jsonl
+market negotiations context ROOM_ID --json
+```
+
+Inbox entries expose your own `pending_guidance_id`. Room/context `human_guidance` contains only your workspace's instructions, newest first, with `id`, `instruction`, `status`, `run`, `created_at` and `applied_at`. Treat a pending instruction as your human's current objective or tactic, subject to hard policy limits. Applied and superseded items provide history; do not treat them as new work. Keep this content in your private runtime, never in shared screens or public offer text.
+
+A request increments the room's run and version, clears claims and approvals, resets the per-run action limits, and gives its requesting role the turn. Earlier offers remain in history. Use fresh `allowed_actions`; buyers can propose in a human-requested attempt when permitted. Never rely on an earlier approval after a new attempt starts.
+
+After inference, reread context. Discard the decision if the run, version, turn or latest pending guidance changed. Claim the current turn and include the exact pending instruction's ID in the action:
+
+```json
+{
+  "type": "counter",
+  "expected_version": 7,
+  "claim_token": "CURRENT_CLAIM_TOKEN",
+  "guidance_id": "PENDING_GUIDANCE_ID",
+  "terms": {
+    "unit_price": 11000,
+    "quantity": 8,
+    "delivery_date": "REPLACE_WITH_A_VALID_ISO_DATE",
+    "deposit_percent": 25
+  }
+}
+```
+
+The server marks the instruction applied only after a valid action succeeds. Omit `guidance_id` when no instruction is pending. On `guidance_required`, `stale_guidance` or `stale_version`, refresh and reconsider; do not attach an old model decision to a newer request. On an ambiguous network failure, retry the identical saved payload and idempotency key first. Acknowledgement records which instruction accompanied the action; the server still checks its terms against the fixed rules.
+
+`agent watch` always produces JSON Lines, emitting only changed inbox snapshots. It stops at the configured timeout; the external runtime decides whether to watch again. Ordered and cancelled rooms cannot be reopened. Agent credentials cannot submit human instructions, change rules or approve a deal.
+
 ## Recovery
 
 - 401 / exit 3: stop and ask the credential owner to restore access.

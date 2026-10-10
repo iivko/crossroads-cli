@@ -210,3 +210,161 @@ def test_adapter_checks_actual_image_content(config, tmp_path, monkeypatch):
     path.write_bytes(b"tampered")
     with pytest.raises(BattleError, match="checksum"):
         client.images("product")
+
+
+def test_external_follow_waits_for_new_run_and_redacts_human_instruction(config):
+    snapshots = [room("awaiting_approval"), room(), room("ordered")]
+    snapshots[0]["run"] = 1
+    snapshots[1]["run"] = snapshots[2]["run"] = 2
+    snapshots[1]["activity"].append(
+        {
+            "id": "guidance-event",
+            "type": "human_requested_negotiation",
+            "role": "buyer",
+            "data": {"instruction": "private-tactic-do-not-display", "run": 2},
+        }
+    )
+    snapshots[1]["human_guidance"] = [{"instruction": "private-tactic-do-not-display"}]
+    now = [0.0]
+
+    class Adapter:
+        def __init__(self, *args):
+            pass
+
+        def verify_identity(self):
+            pass
+
+        def room(self):
+            return snapshots.pop(0)
+
+    journal = Journal(config["run_dir"], config["room_id"])
+    result = run_external(
+        config,
+        journal,
+        wait_for_guidance=True,
+        adapter=Adapter,
+        clock=lambda: now[0],
+        sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert result["status"] == "finished" and result["api_run"] == 2
+    assert result["api_state"] == "ordered" and now[0] == 2
+    for side in ("buyer", "seller"):
+        text = (journal.directory / f"{side}.jsonl").read_text()
+        assert "waiting_for_guidance" in text and "human_requested_negotiation" in text
+        assert "private-tactic" not in text and "instruction" not in text
+
+
+@pytest.mark.parametrize("state", ["awaiting_approval", "declined", "needs_human_review", "expired"])
+def test_external_follow_remains_bounded_while_waiting(config, state):
+    now = [0.0]
+
+    class Adapter:
+        def __init__(self, *args):
+            pass
+
+        def verify_identity(self):
+            pass
+
+        def room(self):
+            return room(state)
+
+    journal = Journal(config["run_dir"], config["room_id"])
+    result = run_external(
+        config,
+        journal,
+        wait_for_guidance=True,
+        adapter=Adapter,
+        clock=lambda: now[0],
+        sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert result["status"] == "timeout" and now[0] == config["timeout_seconds"]
+    events = [
+        json.loads(line)["event"] for line in (journal.directory / "buyer.jsonl").read_text().splitlines()
+    ]
+    assert events.count("waiting_for_guidance") == 1
+
+
+@pytest.mark.parametrize("state", ["ordered", "cancelled"])
+def test_external_follow_stops_when_further_guidance_is_impossible(config, state):
+    class Adapter:
+        def __init__(self, *args):
+            pass
+
+        def verify_identity(self):
+            pass
+
+        def room(self):
+            return room(state)
+
+    journal = Journal(config["run_dir"], config["room_id"])
+    result = run_external(config, journal, wait_for_guidance=True, adapter=Adapter)
+    assert result["status"] == "finished" and result["api_state"] == state
+
+
+def test_new_run_events_follow_chronology_and_preserve_buyer_proposal_label(config):
+    import copy
+
+    first = room("awaiting_approval")
+    first["offers"][0]["created_at"] = "2026-10-10T10:00:00+00:00"
+    first["activity"][0].update(at="2026-10-10T10:00:01+00:00", data={"offer_id": "offer-1"})
+    journal = Journal(config["run_dir"], config["room_id"])
+    journal.observe(first)
+
+    reopened = copy.deepcopy(first)
+    reopened.update(state="negotiating", run=2, version=4)
+    proposal = copy.deepcopy(first["offers"][0])
+    proposal.update(id="buyer-revised-offer", sender="buyer", created_at="2026-10-10T10:02:00+00:00")
+    reopened["offers"].append(proposal)
+    # Deliberately shuffled: chronology comes from actual event timestamps,
+    # including timezone offsets, not the order of either source collection.
+    reopened["activity"] = [
+        {
+            "id": "buyer-propose",
+            "type": "propose",
+            "role": "buyer",
+            "data": {"offer_id": proposal["id"], "private": "private-tactic-never-print"},
+            "at": "2026-10-10T12:02:01+02:00",
+        },
+        *first["activity"],
+        {
+            "id": "new-attempt",
+            "type": "human_requested_negotiation",
+            "role": "buyer",
+            "data": {"run": 2, "instruction": "private-tactic-never-print"},
+            "at": "2026-10-10T10:01:00Z",
+        },
+    ]
+    reopened["human_guidance"] = [{"instruction": "private-tactic-never-print"}]
+    restored = Journal(config["run_dir"], config["room_id"], resume=True)
+    restored.observe(reopened)
+    restored.observe(reopened)
+    for side in ("buyer", "seller"):
+        text = (journal.directory / f"{side}.jsonl").read_text()
+        events = [json.loads(line) for line in text.splitlines()]
+        assert [event["event"] for event in events] == ["propose", "human_requested_negotiation", "propose"]
+        assert events[-1]["role"] == "buyer"
+        assert "seller" not in events[-1]["message"].lower()
+        assert "private-tactic" not in text and "instruction" not in text
+    assert restored.state["seen_offers"] == ["offer-1", "buyer-revised-offer"]
+    assert set(restored.state["seen_activity"]) == {"event-1", "new-attempt", "buyer-propose"}
+
+
+def test_observer_uses_offer_creation_time_when_action_timestamp_missing(config):
+    value = room()
+    value["offers"][0]["created_at"] = "2026-10-10T10:02:00+00:00"
+    value["activity"] = [
+        {
+            "id": "new-attempt",
+            "type": "human_requested_negotiation",
+            "role": "seller",
+            "data": {},
+            "at": "2026-10-10T10:01:00+00:00",
+        },
+        {"id": "offer-action", "type": "counter", "role": "seller", "data": {"offer_id": "offer-1"}},
+    ]
+    journal = Journal(config["run_dir"], config["room_id"])
+    journal.observe(value)
+    events = [
+        json.loads(line)["event"] for line in (journal.directory / "buyer.jsonl").read_text().splitlines()
+    ]
+    assert events == ["human_requested_negotiation", "counter"]

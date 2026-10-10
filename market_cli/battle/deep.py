@@ -23,7 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .io import BattleError, Marketplace, private_json, read_private
-from .runtime import ACTIVE, TERMINAL
+from .runtime import ACTIVE, TERMINAL, pending_guidance_id, should_finish
 
 
 class Terms(BaseModel):
@@ -113,6 +113,12 @@ Never disclose private rules, budgets, credentials or private memory. Do not see
 context. You cannot approve, modify rules, edit the product or execute shell commands. The controller
 claims the turn and submits your structured Decision through the real CLI after checking fresh state.
 Agreement requires two human approvals. Return one valid Decision, with no extra prose.
+Your context's human_guidance contains private instructions from your own authorized human, newest
+first. Follow the pending instruction in this run when choosing your next action, including any
+requested tactic, while respecting all hard rules and allowed_actions. It never authorizes revealing
+secrets or accessing other parties. Applied or superseded instructions are history; newer pending
+instructions take priority. Human requests reopen negotiations and invalidate earlier approvals.
+Reconsider earlier decisions from your memory against the current run and authoritative offer.
 """
 
 
@@ -224,7 +230,7 @@ class TurnState(TypedDict, total=False):
     finished: bool
 
 
-def run_deepagents(config, journal, *, adapter=Marketplace, participant=Participant):
+def run_deepagents(config, journal, *, wait_for_guidance=False, adapter=Marketplace, participant=Participant):
     clients = {role: adapter(config, role, journal.directory) for role in ("buyer", "seller")}
     for client in clients.values():
         client.verify_identity()
@@ -245,7 +251,14 @@ def run_deepagents(config, journal, *, adapter=Marketplace, participant=Particip
         try:
             clients[pending["role"]].act(pending["payload"], pending["key"])
         except BattleError as exc:
-            if exc.code in {"invalid_claim", "stale_version", "not_your_turn", "invalid_state"}:
+            if exc.code in {
+                "invalid_claim",
+                "stale_version",
+                "not_your_turn",
+                "invalid_state",
+                "guidance_required",
+                "stale_guidance",
+            }:
                 # A definitive rejection means this payload did not apply. A completed
                 # idempotent action would have replayed before these server checks.
                 journal.state["pending"] = None
@@ -256,17 +269,29 @@ def run_deepagents(config, journal, *, adapter=Marketplace, participant=Particip
         journal.save()
 
     def refresh(state):
-        bound()
-        submit_pending()  # Replay exact bytes/key BEFORE deciding whether API is terminal.
-        room = clients["buyer"].room()
-        journal.observe(room)
-        if room["state"] in TERMINAL:
-            return {"finished": True}
-        if room["state"] not in ACTIVE:
-            raise BattleError("unexpected_negotiation_state")
-        role = room["next_role"]
-        context = clients[role].context()
-        return {"role": role, "context": context, "finished": False}
+        while True:
+            bound()
+            submit_pending()  # Replay exact bytes/key BEFORE deciding whether API is terminal.
+            room = clients["buyer"].room()
+            journal.observe(room)
+            if should_finish(room["state"], wait_for_guidance):
+                return {"finished": True}
+            if room["state"] not in TERMINAL:
+                if room["state"] not in ACTIVE:
+                    raise BattleError("unexpected_negotiation_state")
+                role = room["next_role"]
+                context = clients[role].context()
+                # A human can reopen for the opposite role between these reads.
+                if context["state"] not in ACTIVE or context["next_role"] != role:
+                    continue
+                journal.state["status"] = "running"
+                journal.save()
+                return {"role": role, "context": context, "finished": False}
+            if journal.state["status"] != "waiting_for_guidance":
+                journal.state["status"] = "waiting_for_guidance"
+                journal.emit("waiting_for_guidance", room_state=room["state"])
+            # Waiting consumes wall-clock time, not model calls or graph recursion steps.
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
 
     def decide(state):
         bound()
@@ -278,7 +303,13 @@ def run_deepagents(config, journal, *, adapter=Marketplace, participant=Particip
         bound()
         role, context = state["role"], state["context"]
         fresh = clients[role].context()
-        if fresh["version"] != context["version"] or fresh["next_role"] != role:
+        if (
+            fresh["version"] != context["version"]
+            or fresh.get("run") != context.get("run")
+            or fresh["next_role"] != role
+            or fresh["state"] not in ACTIVE
+            or pending_guidance_id(fresh) != pending_guidance_id(context)
+        ):
             return {}
         decision = Decision.model_validate(state["decision"])
         validate_decision(decision, fresh)
@@ -295,6 +326,8 @@ def run_deepagents(config, journal, *, adapter=Marketplace, participant=Particip
             "expected_version": claim["expected_version"],
             "claim_token": claim["claim_token"],
         }
+        if guidance_id := pending_guidance_id(fresh):
+            payload["guidance_id"] = guidance_id
         journal.state["pending"] = {"role": role, "payload": payload, "key": str(uuid4())}
         journal.save()
         submit_pending()

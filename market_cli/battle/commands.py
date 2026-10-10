@@ -13,7 +13,7 @@ from .runtime import Journal, run_external, run_lock
 app = typer.Typer(help="Watch independent buyer/seller agents; optional bring-your-own-model Deep Agents.")
 
 
-def execute(config, mode, resume, env_file):
+def execute(config, mode, resume, env_file, wait_for_guidance=False):
     try:
         if env_file:
             read_private_env(env_file)
@@ -21,11 +21,11 @@ def execute(config, mode, resume, env_file):
         with run_lock(settings["run_dir"]):
             journal = Journal(settings["run_dir"], settings["room_id"], resume=resume)
             if mode == "external":
-                result = run_external(settings, journal)
+                result = run_external(settings, journal, wait_for_guidance=wait_for_guidance)
             else:
                 from .deep import run_deepagents
 
-                result = run_deepagents(settings, journal)
+                result = run_deepagents(settings, journal, wait_for_guidance=wait_for_guidance)
         typer.echo(json.dumps(result, indent=2))
     except BattleError as exc:
         typer.echo(json.dumps({"error": {"code": exc.code}}), err=True)
@@ -55,9 +55,10 @@ def run(
     config: Path = typer.Option(..., help="Private JSON config (chmod 600)."),
     mode: Literal["external", "deepagents"] = "external",
     env_file: Path | None = typer.Option(None, help="Optional private model-provider environment file."),
+    wait_for_guidance: bool = typer.Option(False, help="Wait for human requests until the time limit."),
 ):
     """Start the public monitor. External agents bring their own LLMs and tools."""
-    execute(config, mode, False, env_file)
+    execute(config, mode, False, env_file, wait_for_guidance)
 
 
 @app.command()
@@ -65,9 +66,10 @@ def resume(
     config: Path = typer.Option(...),
     mode: Literal["external", "deepagents"] = "external",
     env_file: Path | None = None,
+    wait_for_guidance: bool = typer.Option(False, help="Wait for human requests until the time limit."),
 ):
     """Resume observation, or safely replay a pending optional-adapter action."""
-    execute(config, mode, True, env_file)
+    execute(config, mode, True, env_file, wait_for_guidance)
 
 
 @app.command()

@@ -66,6 +66,7 @@ With the appropriate `MARKET_TOKEN` already supplied in the agent's environment:
 market auth whoami --json
 market agent instructions --json
 market agent inbox --json
+market agent watch --timeout 60 --interval 2 --jsonl
 ```
 
 Seller catalogue editing is a separate permission choice. `examples/seller-agent.json` includes catalogue/image editing; `examples/seller-negotiator.json` is negotiation-only. The server rejects cross-role and administrator scopes for agent credentials.
@@ -113,11 +114,12 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 
 - Successful marketplace commands print JSON to stdout. `--json` is accepted on marketplace leaf commands and is also their default output format. The separate `battle watch` display is human-readable by default; use its `--jsonl` option for event JSON.
 - The CLI unwraps the API's resource-labelled response envelope. Existing commands and `jq` expressions still read payload fields directly; HTTP `status_code` is not added to CLI output. See [API responses versus CLI output](docs/COMMANDS.md#api-responses-versus-cli-output).
-- `watch --jsonl` prints one JSON object per changed state and stops at a terminal state or the timeout.
+- `negotiations watch --jsonl` prints one JSON object per changed room state and stops on an order, decline, cancellation, expiry or the timeout. `agent watch --jsonl` watches changed inbox snapshots until its timeout, including human requests for another attempt.
 - Errors print a JSON `error` object to stderr and return a stable nonzero exit code.
 - Global options (`--profile`, `--base-url`, `--workspace`) precede the command group. Command options follow the leaf command.
 - Creates, request launches, uploads and negotiation actions are idempotent. Supply and retain your own `--idempotency-key` for reliable retries of those operations. Edits use `expected_version`; claims and management operations may require reading current state after a timeout.
 - A new action needs the current room version and claim token. Fetch context and handle 409 explicitly; the CLI never silently retries against newer terms.
+- Dashboard **Negotiate more** instructions are private to the human's role. External runtimes must keep watching or restart; the dashboard never launches their provider. Read own `human_guidance`, act within the hard limits, and include the pending instruction's `id` as `guidance_id`. See the [agent guide](docs/AGENT_GUIDE.md#human-instructions-and-another-attempt).
 - Product/stock/gallery edits fetch a version if you do not supply one. The server still rejects concurrent changes. Rules require an explicit expected policy version.
 - Remote API URLs require HTTPS; plain HTTP is permitted only for loopback and the local Compose API hostname.
 - Invalid API envelopes, mismatched HTTP/body status codes and non-JSON proxy errors produce a safe `invalid_response` error with exit code 1. Update the CLI alongside the API when changing its response contract; the CLI does not silently accept the old unwrapped HTTP format.

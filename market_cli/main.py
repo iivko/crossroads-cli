@@ -550,6 +550,24 @@ def agent_inbox():
     return call("GET", "/agent/inbox")
 
 
+@command(agent, "watch")
+def agent_watch(
+    timeout: int = typer.Option(60, min=1, max=3600),
+    interval: float = typer.Option(2, min=1, max=30),
+    jsonl: bool = False,
+):
+    """Watch your inbox for changed work, including human requests; output JSON Lines."""
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        item = call("GET", "/agent/inbox")
+        signature = json.dumps(item, sort_keys=True)
+        if signature != last:
+            typer.echo(json.dumps(item))
+            last = signature
+        time.sleep(min(interval, max(0, deadline - time.monotonic())))
+
+
 @command(agent, "claim")
 def agent_claim(room_id: str):
     return call("POST", f"/negotiations/{room_id}/claim")

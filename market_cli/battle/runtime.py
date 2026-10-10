@@ -11,10 +11,11 @@ from pathlib import Path
 from .io import BattleError, Marketplace, private_json, read_private
 
 TERMINAL = {"awaiting_approval", "ordered", "declined", "cancelled", "expired", "needs_human_review"}
+FINAL = {"ordered", "cancelled"}
 ACTIVE = {"negotiating", "needs_revision"}
 MESSAGES = {
     "ready": "Both participants are ready. Waiting for independent agents to negotiate.",
-    "propose": "The seller has opened negotiations.",
+    "propose": "The participant has proposed new terms.",
     "counter": "A new counteroffer is on the table.",
     "accept": "Agreement reached. Both humans must approve the exact terms.",
     "decline": "The participant declined. No order has been created.",
@@ -25,7 +26,21 @@ MESSAGES = {
     "timeout": "The observer time limit was reached. Participants remain independent.",
     "thinking": "The participant is inspecting its context and product images.",
     "finished": "Negotiation stopped. Review the final state in the dashboard.",
+    "waiting_for_guidance": "Waiting for a human request or final approval within the time limit.",
+    "human_requested_negotiation": "A human requested another negotiation attempt.",
 }
+
+
+def should_finish(room_state, wait_for_guidance):
+    return room_state in (FINAL if wait_for_guidance else TERMINAL)
+
+
+def pending_guidance_id(context):
+    """The API returns only this role's guidance, newest first."""
+    return next(
+        (item["id"] for item in context.get("human_guidance", []) if item["status"] == "pending"),
+        None,
+    )
 
 
 def public_terms(terms):
@@ -95,19 +110,50 @@ class Journal:
     def observe(self, room):
         self.state["api_state"] = room["state"]
         self.state["api_version"] = room["version"]
+        self.state["api_run"] = room.get("run")
         self.state["next_role"] = room["next_role"]
-        # Each offer carries its actual sender. Never infer it from monitor credentials.
+        activities = room.get("activity", [])
+        offer_actions = {
+            item["data"]["offer_id"]: item
+            for item in activities
+            if item["type"] in ("propose", "counter") and item.get("data", {}).get("offer_id")
+        }
+        events = []
+        # A new run can start with either role proposing. Its persisted action is
+        # authoritative; offer history alone cannot distinguish propose/counter.
         for offer in room.get("offers", []):
             if offer["id"] not in self.state["seen_offers"]:
-                event = "propose" if not self.state["seen_offers"] else "counter"
-                self.state["seen_offers"].append(offer["id"])
-                self.emit(event, offer["sender"], terms=offer["terms"], room_state=room["state"])
-        for activity in room.get("activity", []):
-            if activity["id"] in self.state["seen_activity"]:
-                continue
-            self.state["seen_activity"].append(activity["id"])
-            if activity["type"] in MESSAGES and activity["type"] not in ("propose", "counter"):
-                self.emit(activity["type"], activity["role"], room_state=room["state"])
+                action = offer_actions.get(offer["id"])
+                at = action.get("at") if action else None
+                events.append((at or offer.get("created_at"), 1, "offer", offer, action))
+        for activity in activities:
+            if activity["id"] not in self.state["seen_activity"]:
+                priority = 0 if activity["type"] == "human_requested_negotiation" else 2
+                events.append((activity.get("at"), priority, "activity", activity, None))
+
+        def chronological(event):
+            try:
+                at = datetime.fromisoformat(event[0])
+                at = at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+            except (TypeError, ValueError):
+                at = datetime.min.replace(tzinfo=UTC)
+            return at, event[1]
+
+        for _, _, kind, item, action in sorted(events, key=chronological):
+            if kind == "offer":
+                if item["id"] in self.state["seen_offers"]:
+                    continue
+                fallback = "propose" if not self.state["seen_offers"] else "counter"
+                event = action["type"] if action else fallback
+                self.state["seen_offers"].append(item["id"])
+                # Each offer carries its sender; monitor credentials do not imply authorship.
+                self.emit(event, item["sender"], terms=item["terms"], room_state=room["state"])
+            else:
+                if item["id"] in self.state["seen_activity"]:
+                    continue
+                self.state["seen_activity"].append(item["id"])
+                if item["type"] in MESSAGES and item["type"] not in ("propose", "counter"):
+                    self.emit(item["type"], item["role"], room_state=room["state"])
         current = room.get("current_offer")
         if current:
             self.state["current_terms"] = public_terms(current["terms"])
@@ -121,6 +167,7 @@ class Journal:
                 "status",
                 "api_state",
                 "api_version",
+                "api_run",
                 "next_role",
                 "current_terms",
                 "model_calls",
@@ -144,7 +191,9 @@ def run_lock(directory):
         os.close(fd)
 
 
-def run_external(config, journal, *, adapter=Marketplace, sleep=time.sleep, clock=time.monotonic):
+def run_external(
+    config, journal, *, wait_for_guidance=False, adapter=Marketplace, sleep=time.sleep, clock=time.monotonic
+):
     """Observe real independent participants; never fabricate offers or model decisions."""
     clients = {role: adapter(config, role, journal.directory) for role in ("buyer", "seller")}
     for client in clients.values():
@@ -156,10 +205,17 @@ def run_external(config, journal, *, adapter=Marketplace, sleep=time.sleep, cloc
         while clock() < deadline:
             room = clients["buyer"].room()
             journal.observe(room)
-            if room["state"] in TERMINAL:
+            if should_finish(room["state"], wait_for_guidance):
                 journal.state["status"] = "finished"
                 journal.emit("finished", room_state=room["state"])
                 return journal.summary()
+            if room["state"] in TERMINAL:
+                if journal.state["status"] != "waiting_for_guidance":
+                    journal.state["status"] = "waiting_for_guidance"
+                    journal.emit("waiting_for_guidance", room_state=room["state"])
+            else:
+                journal.state["status"] = "observing"
+                journal.save()
             sleep(min(1, max(0, deadline - clock())))
         journal.state["status"] = "timeout"
         journal.emit("timeout")

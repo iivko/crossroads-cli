@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import httpx
 
+from .responses import response_contract
+
 
 class CLIError(Exception):
     def __init__(self, code, message, exit_code=1, details=None):
@@ -78,6 +80,7 @@ class Client:
     def call(
         self, method, path, data=None, params=None, files=None, authenticated=True, binary=False, key=None
     ):
+        method = method.upper()
         headers = {}
         if authenticated:
             if not self.token:
@@ -106,16 +109,73 @@ class Client:
                 6,
                 {"idempotency_key": retry_key} if method != "GET" else None,
             )
-        if response.status_code >= 300:
-            try:
-                error = response.json().get("error", {})
-            except (ValueError, AttributeError):
-                error = {}
-            status = response.status_code
-            raise CLIError(
-                error.get("code", "http_error"),
-                error.get("message", f"API returned HTTP {status}"),
-                {401: 3, 403: 4, 409: 5, 422: 2}.get(status, 1),
-                error.get("details"),
-            )
-        return response.content if binary else response.json()
+        return decode_response(response, method, path, binary=binary)
+
+
+def decode_response(response: httpx.Response, method: str, path: str, *, binary: bool = False):
+    """Unwrap once, checking the route label and matching HTTP/body status codes."""
+    status = response.status_code
+
+    def invalid():
+        # Never echo malformed response content: it may contain a token or an HTML
+        # proxy error page. The caller can diagnose API/client version skew safely.
+        raise CLIError(
+            "invalid_response",
+            "API returned an invalid response. Check that the CLI and API versions are compatible.",
+            1,
+            {"http_status": status},
+        )
+
+    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if binary and 200 <= status < 300:
+        if status != 200 or media_type not in ("image/jpeg", "image/png", "image/webp"):
+            invalid()
+        return response.content
+
+    if media_type != "application/json":
+        invalid()
+    try:
+        envelope = response.json()
+    except ValueError:
+        invalid()
+    if (
+        not isinstance(envelope, dict)
+        or type(envelope.get("status_code")) is not int
+        or envelope["status_code"] != status
+    ):
+        invalid()
+    if status >= 400:
+        if set(envelope) != {"error", "status_code"}:
+            invalid()
+        error = envelope["error"]
+        if (
+            not isinstance(error, dict)
+            or set(error) != {"code", "message", "details"}
+            or not isinstance(error["code"], str)
+            or not error["code"]
+            or not isinstance(error["message"], str)
+            or not error["message"]
+        ):
+            invalid()
+        raise CLIError(
+            error["code"],
+            error["message"],
+            {401: 3, 403: 4, 409: 5, 422: 2}.get(status, 1),
+            error["details"],
+        )
+    contract = response_contract(method, path)
+    if not 200 <= status < 300 or binary or contract is None:
+        invalid()
+    label, legacy_array = contract
+    if set(envelope) != {label, "status_code"} or not isinstance(envelope[label], dict):
+        invalid()
+    payload = envelope[label]
+    if legacy_array:
+        if (
+            set(payload) != {"items"}
+            or not isinstance(payload["items"], list)
+            or not all(isinstance(item, dict) for item in payload["items"])
+        ):
+            invalid()
+        return payload["items"]
+    return payload

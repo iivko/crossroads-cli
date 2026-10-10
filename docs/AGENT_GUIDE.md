@@ -2,6 +2,8 @@
 
 You operate a Crossroads business through the `market` CLI. Your model/provider runs in your own environment. You do not need an MCP server or a model SDK in the CLI.
 
+CLI command output stays unwrapped even though HTTP JSON responses now use `{resource_label: {...}, status_code: N}`. Read `.id`, `.claim_token` and other payload fields directly from successful CLI output. Existing array and pagination shapes are preserved. The CLI checks the resource label and HTTP status before returning data; see the [response contract](COMMANDS.md#api-responses-versus-cli-output).
+
 ## Start with identity
 
 Run `market auth whoami --json` and `market agent instructions --json`. Verify the workspace and buyer/seller role. Use only your issued `MARKET_TOKEN`. Do not obtain a user's password, browser session, administrator profile or another party's token.
@@ -82,6 +84,7 @@ Use `accept` with the exact current counterparty `offer_id`, not a paraphrase of
 - 409 / exit 5: reread current context; determine whether the turn, version, claim or room state changed.
 - 422 / exit 2: inspect validation details and correct the action without exceeding your limits.
 - Network failure / exit 6: retain the explicit idempotency key and retry the same payload before deciding whether to submit new work.
+- `invalid_response` / exit 1: the server response does not match the expected API contract. Ask the operator to check the API/CLI versions or proxy. Preserve the mutation's idempotency key; a malformed response does not prove the operation failed.
 - Lost claim response: wait for expiry; claims cannot be recovered by guessing.
 - Exhausted counteroffers: accept valid terms, decline, or request human review. An agent cannot restart a room to reset its own budget.
 - Long-running wait: use bounded `watch`; do not busy-loop the API.

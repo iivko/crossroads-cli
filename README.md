@@ -104,6 +104,7 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 ## Automation contract
 
 - Successful commands print JSON to stdout. `--json` is accepted on every leaf command and is also the default output format.
+- The CLI unwraps the API's resource-labelled response envelope. Existing commands and `jq` expressions still read payload fields directly; HTTP `status_code` is not added to CLI output. See [API responses versus CLI output](docs/COMMANDS.md#api-responses-versus-cli-output).
 - `watch --jsonl` prints one JSON object per changed state and stops at a terminal state or the timeout.
 - Errors print a JSON `error` object to stderr and return a stable nonzero exit code.
 - Global options (`--profile`, `--base-url`, `--workspace`) precede the command group. Command options follow the leaf command.
@@ -111,6 +112,7 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 - A new action needs the current room version and claim token. Fetch context and handle 409 explicitly; the CLI never silently retries against newer terms.
 - Product/stock/gallery edits fetch a version if you do not supply one. The server still rejects concurrent changes. Rules require an explicit expected policy version.
 - Remote API URLs require HTTPS; plain HTTP is permitted only for loopback and the local Compose API hostname.
+- Invalid API envelopes, mismatched HTTP/body status codes and non-JSON proxy errors produce a safe `invalid_response` error with exit code 1. Update the CLI alongside the API when changing its response contract; the CLI does not silently accept the old unwrapped HTTP format.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -135,4 +137,4 @@ Environment variables: `MARKET_API_URL`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARK
 uv run pytest -q
 ```
 
-Tests cover nested command parsing, JSON/error output, private credential files, media directory restrictions and real file download manifests. The backend's `scripts/demo_agents.py` additionally exercises this installed CLI against the running PostgreSQL/MinIO stack without an LLM.
+Tests cover nested command parsing, HTTP envelope validation, login/action/collection compatibility, JSON/error output, private credential files, media directory restrictions and real file download manifests. The backend's `scripts/demo_agents.py` additionally exercises this installed CLI against the running PostgreSQL/MinIO stack without an LLM.

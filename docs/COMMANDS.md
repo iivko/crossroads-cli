@@ -4,6 +4,35 @@ Syntax: `market [--profile NAME] [--base-url URL] [--workspace ID] GROUP COMMAND
 
 Every leaf command accepts `--json` and `--idempotency-key KEY`. Use `--help` on a command for exact arguments. JSON files can be replaced by `--file -` to read stdin; this cannot be combined with another operation consuming stdin in the same invocation.
 
+## API responses versus CLI output
+
+HTTP JSON responses contain exactly one resource label and a numeric `status_code` matching the actual HTTP status. The label depends on the endpoint: a product uses `product`, a turn claim uses `claim`, and a negotiation action uses `action`. Errors use `error`. The [backend API reference](https://github.com/iivko/crossroads-backend/blob/main/docs/api.md) documents the full HTTP contract.
+
+The CLI validates that envelope, then prints its resource payload. This keeps existing shell scripts compatible. These examples show the fields relevant to scripting:
+
+| Operation | HTTP response | CLI output |
+| --- | --- | --- |
+| Product lookup | `{"product":{"id":"p1",...},"status_code":200}` | `{"id":"p1",...}` |
+| Turn claim | `{"claim":{"claim_token":"...","expected_version":3,...},"status_code":200}` | `{"claim_token":"...","expected_version":3,...}` |
+| Paginated products | `{"products":{"items":[...],"limit":50,"offset":0},"status_code":200}` | `{"items":[...],"limit":50,"offset":0}` |
+| Workspace list | `{"workspaces":{"items":[...]},"status_code":200}` | `[...]` |
+| Permission error | `{"error":{"code":"permission_denied","message":"...","details":null},"status_code":403}` | `{"error":{"code":"permission_denied","message":"...","details":null}}` on stderr; exit 4 |
+
+Bare-array CLI outputs are preserved specifically for workspace lists, credential lists, categories, product history, image metadata, rule history and matching results. Paginated collections retain their pagination fields. Nested payload fields are never recursively unwrapped.
+
+For example, continue reading IDs and claim tokens directly:
+
+```sh
+market products show PRODUCT_ID | jq -r '.id'
+market agent claim ROOM_ID | jq -r '.claim_token'
+market products list | jq '.items'
+market products images list PRODUCT_ID | jq '.[0].id'
+```
+
+Image-content HTTP endpoints return image bytes on success. Their errors still use the JSON error envelope. `products images read` downloads those bytes and prints its local-file manifest as before; there is no base64 wrapper.
+
+If the API sends a missing or wrong resource label, mismatched status, invalid JSON or an unexpected body type, the CLI returns `invalid_response` (exit 1). Its error details contain only `http_status`; it does not print the unexpected body, which could contain sensitive data. Ensure the CLI and API have been updated together before retrying. No transport failure grants permission to repeat a mutation with a new idempotency key.
+
 ## Identity and access
 
 | Command | Purpose |

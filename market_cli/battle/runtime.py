@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..conversation import public_messages, terminal_text
 from .io import BattleError, Marketplace, private_json, read_private
 
 TERMINAL = {"awaiting_approval", "ordered", "declined", "cancelled", "expired", "needs_human_review"}
@@ -17,6 +18,8 @@ MESSAGES = {
     "ready": "Both participants are ready. Waiting for independent agents to negotiate.",
     "propose": "The participant has proposed new terms.",
     "counter": "A new counteroffer is on the table.",
+    "revise": "The participant has revised its own offer.",
+    "message": "The participant shared a commercial message.",
     "accept": "Agreement reached. Both humans must approve the exact terms.",
     "decline": "The participant declined. No order has been created.",
     "request_human_review": "The participant requested human review.",
@@ -28,6 +31,7 @@ MESSAGES = {
     "finished": "Negotiation stopped. Review the final state in the dashboard.",
     "waiting_for_guidance": "Waiting for a human request or final approval within the time limit.",
     "human_requested_negotiation": "A human requested another negotiation attempt.",
+    "business_brief_updated": "A human updated its negotiation needs and started another attempt.",
 }
 
 
@@ -86,7 +90,7 @@ class Journal:
     def save(self):
         private_json(self.path, self.state)
 
-    def emit(self, event, role="system", *, terms=None, room_state=None):
+    def emit(self, event, role="system", *, terms=None, room_state=None, dialogue=None):
         if event not in MESSAGES or role not in ("buyer", "seller", "system"):
             raise BattleError("invalid_public_event")
         self.state["sequence"] += 1
@@ -99,6 +103,17 @@ class Journal:
         }
         if terms:
             record["terms"] = public_terms(terms)
+        if dialogue and event in {"message", "propose", "counter", "revise"}:
+            # Only the explicitly public transcript projection reaches this path.
+            record["dialogue"] = {"message": terminal_text(dialogue["message"])}
+            if dialogue.get("purpose") in {"question", "answer", "tradeoff", "explanation"}:
+                record["dialogue"]["purpose"] = dialogue["purpose"]
+            if isinstance(dialogue.get("reply_to_action_id"), str):
+                record["dialogue"]["reply_to_action_id"] = terminal_text(dialogue["reply_to_action_id"], 50)
+            if isinstance(dialogue.get("image_ids"), list):
+                record["dialogue"]["image_ids"] = [
+                    terminal_text(value, 50) for value in dialogue["image_ids"][:5]
+                ]
         if room_state in TERMINAL | ACTIVE:
             record["state"] = room_state
         for side in ("buyer", "seller"):
@@ -113,10 +128,11 @@ class Journal:
         self.state["api_run"] = room.get("run")
         self.state["next_role"] = room["next_role"]
         activities = room.get("activity", [])
+        dialogue = {item["id"]: item for item in public_messages(room)}
         offer_actions = {
             item["data"]["offer_id"]: item
             for item in activities
-            if item["type"] in ("propose", "counter") and item.get("data", {}).get("offer_id")
+            if item["type"] in ("propose", "counter", "revise") and item.get("data", {}).get("offer_id")
         }
         events = []
         # A new run can start with either role proposing. Its persisted action is
@@ -128,7 +144,9 @@ class Journal:
                 events.append((at or offer.get("created_at"), 1, "offer", offer, action))
         for activity in activities:
             if activity["id"] not in self.state["seen_activity"]:
-                priority = 0 if activity["type"] == "human_requested_negotiation" else 2
+                priority = (
+                    0 if activity["type"] in {"human_requested_negotiation", "business_brief_updated"} else 2
+                )
                 events.append((activity.get("at"), priority, "activity", activity, None))
 
         def chronological(event):
@@ -147,13 +165,24 @@ class Journal:
                 event = action["type"] if action else fallback
                 self.state["seen_offers"].append(item["id"])
                 # Each offer carries its sender; monitor credentials do not imply authorship.
-                self.emit(event, item["sender"], terms=item["terms"], room_state=room["state"])
+                self.emit(
+                    event,
+                    item["sender"],
+                    terms=item["terms"],
+                    room_state=room["state"],
+                    dialogue=dialogue.get(action["id"]) if action else None,
+                )
             else:
                 if item["id"] in self.state["seen_activity"]:
                     continue
                 self.state["seen_activity"].append(item["id"])
-                if item["type"] in MESSAGES and item["type"] not in ("propose", "counter"):
-                    self.emit(item["type"], item["role"], room_state=room["state"])
+                if item["type"] in MESSAGES and item["type"] not in ("propose", "counter", "revise"):
+                    self.emit(
+                        item["type"],
+                        item["role"],
+                        room_state=room["state"],
+                        dialogue=dialogue.get(item["id"]),
+                    )
         current = room.get("current_offer")
         if current:
             self.state["current_terms"] = public_terms(current["terms"])

@@ -16,6 +16,7 @@ import typer
 
 from .battle.commands import app as battle
 from .client import Client, CLIError, read_config, save_profile
+from .conversation import public_messages, terminal_text
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -31,6 +32,7 @@ stock = typer.Typer(help="Seller inventory management.")
 rules = typer.Typer(help="Inspect private rules; owners can publish policy versions.")
 requests = typer.Typer(help="Buyer-only purchase requests and matching.")
 negotiations = typer.Typer(help="Role-scoped context and structured commercial actions.")
+brief = typer.Typer(help="Own private negotiation brief; only human owners may change it.")
 agent = typer.Typer(help="Instructions, work discovery and turn claims for any agent runtime.")
 approvals = typer.Typer(help="Read approval status or open human review. CLI tokens cannot approve.")
 orders = typer.Typer(help="Inspect your workspace's confirmed orders and evidence.")
@@ -50,6 +52,7 @@ for name, group in [
     app.add_typer(group, name=name)
 products.add_typer(images, name="images")
 products.add_typer(stock, name="stock")
+negotiations.add_typer(brief, name="brief")
 state = {}
 
 
@@ -517,6 +520,76 @@ for command_name, suffix, method in [
 def negotiations_act(room_id: str, file: Path = typer.Option(..., "--file")):
     """Submit a typed action containing claim_token and expected_version. No automatic claiming or approval."""
     return call("POST", f"/negotiations/{room_id}/actions", data=document(file))
+
+
+@command(negotiations, "say")
+def negotiations_say(room_id: str, file: Path = typer.Option(..., "--file")):
+    """Send public dialogue with an explicit claim/version; no automatic claiming."""
+    data = document(file)
+    if data.get("type", "message") != "message":
+        raise CLIError("invalid_document", "say accepts only a message action; use act for offers", 2)
+    data["type"] = "message"
+    return call("POST", f"/negotiations/{room_id}/actions", data=data)
+
+
+@command(negotiations, "messages")
+def negotiations_messages(
+    room_id: str,
+    limit: int = typer.Option(50, min=1, max=100),
+    offset: int = typer.Option(0, min=0),
+    run: int | None = typer.Option(None, min=1),
+    watch: bool = False,
+    timeout: int = typer.Option(60, min=1, max=3600),
+    interval: float = typer.Option(2, min=1, max=30),
+    text: bool = typer.Option(False, "--text", help="Render plain text safely for a human terminal."),
+    jsonl: bool = False,
+):
+    """Read public dialogue/explanations. --watch emits each new message once as JSON Lines."""
+    deadline = time.monotonic() + timeout
+    seen = set()
+    while True:
+        page_offset = offset
+        while True:
+            page = call(
+                "GET",
+                f"/negotiations/{room_id}/messages",
+                params={
+                    k: v
+                    for k, v in {"limit": limit, "offset": page_offset, "run": run}.items()
+                    if v is not None
+                },
+            )
+            if not watch and not text and not jsonl:
+                return page
+            for item in public_messages({"activity": page["items"]}):
+                if item["id"] in seen:
+                    continue
+                seen.add(item["id"])
+                if text:
+                    typer.echo(f"{item['role'].upper()} · {item.get('purpose', item['type'])}")
+                    typer.echo(terminal_text(item["message"]) + "\n")
+                else:
+                    typer.echo(json.dumps(item, ensure_ascii=True))
+            page_offset += len(page["items"])
+            if not watch or not page["items"] or page_offset >= page["total"] or time.monotonic() >= deadline:
+                break
+        if not watch or time.monotonic() >= deadline:
+            return
+        time.sleep(min(interval, max(0, deadline - time.monotonic())))
+        if time.monotonic() >= deadline:
+            return
+
+
+@command(brief, "get")
+def brief_get(room_id: str):
+    """Read your workspace's private objectives and structured requirements."""
+    return call("GET", f"/negotiations/{room_id}/brief")
+
+
+@command(brief, "set")
+def brief_set(room_id: str, file: Path = typer.Option(..., "--file")):
+    """Owner-only replacement of a brief using explicit room/brief versions."""
+    return call("PUT", f"/negotiations/{room_id}/brief", data=document(file))
 
 
 @command(negotiations, "watch")

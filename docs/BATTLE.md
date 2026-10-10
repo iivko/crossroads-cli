@@ -126,13 +126,14 @@ market battle watch --run-dir "$BATTLE_RUN_DIR" --role buyer
 market battle watch --run-dir "$BATTLE_RUN_DIR" --role seller
 ```
 
-The displays show real submitted offers, who made them, delivery-inclusive
-totals, deposits, dates and room status. Both feeds include the public exchange
-so each side's counteroffer remains understandable. They do not display private
-prompts, model reasoning, budgets, policy floors, credentials, claim tokens or
-raw provider exceptions. The messages are fixed descriptions of actual API
-events rather than invented agent dialogue. `--jsonl` emits those same safe
-events as JSON Lines.
+The displays show actual agent-authored dialogue and offer explanations, followed
+by submitted terms, totals, deposits, dates and room status. Both feeds include
+the public exchange. Private briefs, owner questions, guidance, model memory,
+credentials and provider exceptions are excluded. Generic status events remain
+fixed descriptions of persisted API actions; commercial text comes from the
+participants themselves. `--jsonl` emits the same public events. Terminal control
+characters are removed from displayed dialogue. Agents must not deliberately
+copy private information into public messages; rendering is not a secrecy filter.
 
 Watchers wait for their feed to appear. Their default timeout is one hour; use
 `--timeout SECONDS` to change it. They exit after a finished, paused or timeout
@@ -155,9 +156,11 @@ The participant loop is:
    Attach the verified image bytes/files to its own model.
 3. Inspect the current room state, version, allowed actions and own private
    limits. Wait if it is the other participant's turn.
-4. Choose a structured proposal, counteroffer, acceptance, decline or supported
-   clarification. The seller maximizes proceeds above its floor; the buyer
-   minimizes the delivery-inclusive total within its budget.
+4. Read the owner's brief, ask and answer meaningful commercial questions, and
+   discuss tradeoffs through public message actions. Rank feasible choices by
+   the owner's priorities before fallback price optimization. Then propose,
+   counter, revise an own offer, accept, decline or ask the owner privately for
+   a decision. See the [conversation walkthrough](CONVERSATION.md).
 5. Refresh context after model inference, acquire its turn with
    `market agent claim ROOM_ID --json`, and submit the exact action through
    `market negotiations act ROOM_ID --file PRIVATE_ACTION_FILE
@@ -202,8 +205,9 @@ agents. Each participant must enforce its own wall-clock/retry bounds in additio
 to the backend's turn, lease and counteroffer limits. Stop or pause participant
 processes separately when that is the operator's intent.
 
-The API enforces the bounded negotiation, including three counteroffers per
-party and expiring claims. Agreement transitions to `awaiting_approval`. Neither
+The API enforces the bounded negotiation, including three counters/revisions per
+party, twelve shared conversation slots per run and expiring claims. Offer
+explanations count as conversation slots. Agreement transitions to `awaiting_approval`. Neither
 agent nor the observer can approve an order: both designated humans must review
 the exact terms in the dashboard. Stock is committed only through the existing
 validated order/approval flow. A decline, expiry or human-review request is a
@@ -300,6 +304,14 @@ the real product images. LangGraph refreshes API state, runs the correct
 participant, validates its decision, obtains a claim and submits through the
 CLI. Pending actions retain their exact payload and idempotency key for recovery.
 The API remains authoritative.
+
+The agents read their own private briefs and shared conversation through read-only
+tools. They discuss needs and tradeoffs, explain offers when message budget allows,
+and can ask a private owner question through human review. Public text never
+constitutes agreement. Each role retains its latest six complete model turns and
+separate private virtual notes; old image copies are dropped from memory because
+the actual gallery is attached again for the next decision. Current API facts,
+limits and briefs always override earlier remembered decisions.
 
 The models have no arbitrary shell, delegation, policy-editing or approval tool.
 This adapter is a trusted local demonstration process with separated role

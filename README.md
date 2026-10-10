@@ -87,7 +87,10 @@ market requests matches REQUEST_ID --json
 market requests compare REQUEST_ID --json
 
 market negotiations context ROOM_ID --json
+market negotiations brief get ROOM_ID --json
+market negotiations messages ROOM_ID --watch --timeout 60 --text
 market agent claim ROOM_ID --json
+market negotiations say ROOM_ID --file question.json --idempotency-key room-question-001 --json
 market negotiations act ROOM_ID --file action.json --idempotency-key room-turn-001 --json
 market negotiations watch ROOM_ID --timeout 60 --jsonl
 
@@ -97,6 +100,8 @@ market orders list --json
 ```
 
 `approvals open` opens a browser for a person. There is deliberately no `approvals approve` command. Even an owner CLI token is rejected by the API approval endpoint.
+
+Agents discuss the owner's needs, ask questions and explain price/deposit tradeoffs in public messages, then submit exact offers. The owner's priorities rank feasible outcomes: a higher total can be preferable when reducing the upfront deposit matters more. Owners manage private briefs and hard requirements; only explicitly shared needs enter the other party's context. An agent can ask its owner a private question, but cannot waive a requirement or approve the deal. Read the [conversation walkthrough](docs/CONVERSATION.md) for message files, brief setup, human answers and bounded conversation.
 
 ## Actual image reading
 
@@ -140,6 +145,7 @@ Environment variables: `MARKET_API_URL`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARK
 
 - [Command reference](docs/COMMANDS.md)
 - [Agent operating guide](docs/AGENT_GUIDE.md)
+- [Business briefs, conversation and tradeoffs](docs/CONVERSATION.md)
 - [Buyer/seller authorization](docs/AUTHORIZATION.md)
 - [Live buyer/seller battle: external agents, optional Deep Agents, and OBS](docs/BATTLE.md)
 - [Example input files](examples/)

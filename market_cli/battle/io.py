@@ -131,6 +131,15 @@ class Marketplace:
     def room(self):
         return self._run(["negotiations", "show", self.room_id])
 
+    def messages(self):
+        context = self.context()
+        return self._run(
+            ["negotiations", "messages", self.room_id, "--limit", "100", "--run", str(context["run"])]
+        )
+
+    def brief(self):
+        return self._run(["negotiations", "brief", "get", self.room_id])
+
     def product(self, product_id):
         return self._run(["products", "show", product_id])
 

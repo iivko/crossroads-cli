@@ -113,15 +113,26 @@ The sample request file uses an illustrative date. Replace it before use, or gen
 | `negotiations list [--state STATE] [--limit N] [--offset N]` | Participant's rooms |
 | `negotiations show ROOM` | Offers, approvals, activity and current state |
 | `negotiations context ROOM` | Permitted next actions, private own-side limits and public facts |
+| `negotiations brief get ROOM` | Read your workspace's private goals and evaluated requirements |
+| `negotiations brief set ROOM --file FILE` | Owner-only full replacement; requires room/brief versions and starts a new run |
+| `negotiations messages ROOM [--limit N] [--offset N] [--run N]` | Read a page of public dialogue and offer explanations |
+| `negotiations messages ROOM --watch [--timeout SECONDS] [--interval SECONDS] [--text]` | Watch new shared dialogue as JSON Lines or safe plain text |
 | `agent instructions` | Schemas, role permissions and operating guidance |
 | `agent inbox` | Discover rooms and whether this role can act |
 | `agent watch [--timeout SECONDS] [--interval SECONDS] --jsonl` | Watch changed inbox snapshots, including private human requests; default timeout 60 seconds |
 | `agent claim ROOM` | Acquire a short turn lease |
 | `negotiations act ROOM --file FILE` | Submit a structured action |
+| `negotiations say ROOM --file FILE` | Send a public message with explicit claim/version; sets `type:message` |
 | `negotiations watch ROOM [--timeout SECONDS] [--interval SECONDS] --jsonl` | Observe persisted state changes; default timeout 60 seconds |
 | `negotiations retry ROOM` | Buyer user starts a new bounded attempt after decline, expiry or escalation |
 
-An action document includes `type`, `expected_version`, `claim_token`, and action-specific fields. When own-role `human_guidance` contains a pending instruction, also send its `id` as `guidance_id`. The successful action marks it applied; a missing or outdated ID is rejected. Omit `guidance_id` when there is no pending instruction. Propose/counter require `terms`; accept requires `offer_id`; clarifications require a topic (`specifications`, `delivery`, `images`, `quantity`). Decline and human review take no terms/topic/offer ID. Extra fields and arbitrary model-generated reasoning are rejected.
+An action document includes `type`, `expected_version`, `claim_token`, and action-specific fields. When own-role `human_guidance` contains a pending instruction, also send its `id` as `guidance_id`. The successful action marks it applied; a missing or outdated ID is rejected. Omit `guidance_id` when there is no pending instruction. Propose/counter/revise require `terms`; accept requires `offer_id`; legacy clarifications require a topic (`specifications`, `delivery`, `images`, `quantity`). Decline and human review take no terms/topic/offer ID.
+
+`message` requires public text (up to 2,000 characters) and `purpose` (`question`, `answer`, `tradeoff`, `explanation`). Offers may include a public message with `purpose:explanation`. Optional `reply_to_action_id` and up to five unique `image_ids` require message text. `request_human_review` may include a private `human_question`; no other action may contain it. Unknown fields are rejected. Human questions and private model notes must never be copied into public text.
+
+`revise` changes your own current offer after the other side replies; `counter` changes the counterparty's offer. They share the three-action per-side budget. Public messages and offer explanations share 12 conversation slots across both roles per run. Read current `allowed_actions` and remaining limits. At zero message slots, valid typed offers without public text remain possible. See the [complete conversation protocol](CONVERSATION.md).
+
+Brief documents contain `expected_version` (room), `expected_brief_version`, private `goals`, `shareable_needs` and `requirements`. Set operations replace the entire brief and require a reusable idempotency key; preserve the original document when retrying. Agents may read their own brief but only a human owner session can change it. Pending hard requirements block agreement; only the owner can edit or explicitly waive them. Brief updates invalidate the offer, approvals and claims and start a new run.
 
 Lease expiry defaults to 180 seconds. There is no automatic lease renewal. If inference outlasts the lease, fetch context and reclaim the turn; the backend rejects the old claim. Never accept your own offer. Normal first proposals and invalidated-offer revisions belong to the seller; a buyer can propose when its human has requested a new attempt and the context allows it. Always follow `allowed_actions`.
 

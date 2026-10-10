@@ -7,6 +7,7 @@ from typing import Literal
 
 import typer
 
+from ..conversation import terminal_text
 from .io import BattleError, load_config, read_private
 from .runtime import Journal, run_external, run_lock
 
@@ -94,12 +95,12 @@ def watch(
     timeout: int = typer.Option(3600, min=1, max=43200),
     jsonl: bool = False,
 ):
-    """Display redacted offers in a terminal. It never reads private agent memory."""
+    """Display public dialogue and offers. It never reads private agent memory."""
     if not jsonl:
         typer.secho(
             f"CROSSROADS  |  {role.upper()} AGENT", fg="cyan" if role == "buyer" else "yellow", bold=True
         )
-        typer.echo("Live offers · EUR · Human approval required\n")
+        typer.echo("Live conversation and offers · EUR · Human approval required\n")
     path = run_dir / f"{role}.jsonl"
     deadline, offset = time.monotonic() + timeout, 0
     try:
@@ -119,12 +120,21 @@ def watch(
                             typer.echo(json.dumps(item))
                         else:
                             label = item["role"].upper()
+                            dialogue = item.get("dialogue", {})
+                            event_label = (
+                                dialogue.get("purpose", "message")
+                                if item["event"] == "message"
+                                else item["event"]
+                            )
                             typer.secho(
-                                f"{item['at'][11:19]}  {label}: {item['event'].replace('_', ' ').upper()}",
+                                f"{item['at'][11:19]}  {label}: {event_label.replace('_', ' ').upper()}",
                                 fg="cyan" if item["role"] == "buyer" else "yellow",
                                 bold=True,
                             )
-                            typer.echo(item["message"])
+                            if not dialogue:
+                                typer.echo(item["message"])
+                            else:
+                                typer.echo(terminal_text(dialogue.get("message")))
                             if terms := item.get("terms"):
                                 typer.echo(
                                     f"  {euro(terms['unit_price'])}/chair × {terms['quantity']}"

@@ -78,6 +78,7 @@ def test_agent_constructs_without_shell_or_delegation_tools(tmp_path):
     )
     tools = participant.agent.nodes["tools"].bound.tools_by_name
     assert "inspect_current_negotiation" in tools and "inspect_product" in tools
+    assert "inspect_shared_conversation" in tools and "inspect_private_brief" in tools
     assert not {"execute", "task", "eval"} & tools.keys()
 
 
@@ -106,6 +107,8 @@ def test_role_memory_and_actual_image_inputs_are_isolated(tmp_path, monkeypatch)
         own_context["human_guidance"] = [
             {"id": f"{role}-guidance", "status": "pending", "instruction": f"{role}-private-tactic"}
         ]
+        own_context["private_brief"] = {"version": 1, "goals": f"{role}-private-goal", "requirements": []}
+        own_context["human_questions"] = [{"question": f"{role}-private-question"}]
         p.decide(own_context)
     buyer_text = captures[0]["messages"][-1].content[0]["text"]
     seller_text = captures[1]["messages"][-1].content[0]["text"]
@@ -113,6 +116,8 @@ def test_role_memory_and_actual_image_inputs_are_isolated(tmp_path, monkeypatch)
     assert "min_unit_price" in seller_text and "max_total" not in seller_text
     assert "buyer-private-tactic" in buyer_text and "seller-private-tactic" not in buyer_text
     assert "seller-private-tactic" in seller_text and "buyer-private-tactic" not in seller_text
+    assert "buyer-private-goal" in buyer_text and "seller-private-goal" not in buyer_text
+    assert "seller-private-question" in seller_text and "buyer-private-question" not in seller_text
     assert captures[0]["messages"][-1].content[1]["base64"] == "cmVhbC1waG90bw=="
     assert len(captures[1]["messages"]) == 1
     assert (tmp_path / "buyer" / "memory.json").stat().st_mode & 0o777 == 0o600
@@ -522,3 +527,242 @@ def test_deep_follow_waiting_has_wall_clock_bound_and_no_model_calls(tmp_path, m
         )
     assert now[0] == 10 and journal.state["model_calls"] == 0
     assert journal.state["status"] == "paused"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "message", "message": "What matters most?", "purpose": "question"},
+        {
+            "type": "message",
+            "message": "Deposit matters most.",
+            "purpose": "answer",
+            "reply_to_action_id": "question-id",
+        },
+        {"type": "request_human_review", "human_question": "Privately, is a lower deposit worth €20?"},
+    ],
+)
+def test_conversation_decision_shapes_match_protocol(payload):
+    assert Decision.model_validate(payload).model_dump(exclude_none=True) == payload
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"message": "A public explanation"},
+        {"purpose": "explanation"},
+        {"image_ids": ["image-id"]},
+        {"human_question": "Cannot attach a private question to an offer"},
+        {"message": "Evidence", "purpose": "explanation", "image_ids": ["same", "same"]},
+    ],
+)
+def test_offer_decision_rejects_malformed_or_private_message_fields(extra):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Decision.model_validate({**proposal().model_dump(exclude_none=True), **extra})
+
+
+def test_legacy_decisions_do_not_add_new_defaults_to_retry_payload():
+    original = {"type": "decline"}
+    assert Decision.model_validate(original).model_dump(exclude_none=True) == original
+    old_offer = proposal().model_dump(exclude_none=True)
+    assert set(old_offer) == {"type", "terms"}
+    revised = Decision.model_validate(
+        {
+            **old_offer,
+            "type": "revise",
+            "message": "Smaller deposit at a higher unit price.",
+            "purpose": "explanation",
+        }
+    )
+    assert revised.type == "revise" and revised.purpose == "explanation"
+
+
+def test_private_memory_retains_complete_recent_turns_without_repeated_images():
+    from market_cli.battle.deep import bounded_memory
+
+    messages = []
+    for turn in range(8):
+        messages.extend(
+            [
+                {
+                    "type": "human",
+                    "data": {
+                        "content": [
+                            {"type": "text", "text": f"private turn {turn}"},
+                            {"type": "image", "base64": "heavy-photo"},
+                        ]
+                    },
+                },
+                {"type": "ai", "data": {"content": "", "tool_calls": [{"id": f"tool-{turn}"}]}},
+                {"type": "tool", "data": {"content": "fact", "tool_call_id": f"tool-{turn}"}},
+            ]
+        )
+    retained = bounded_memory(messages)
+    assert len(retained) == 18
+    assert retained[0]["type"] == "human" and retained[0]["data"]["content"][0]["text"] == "private turn 2"
+    assert retained[2]["data"]["tool_call_id"] == "tool-2"
+    assert "heavy-photo" not in json.dumps(retained)
+
+
+def test_deep_controller_exchanges_dialogue_revises_then_stops_for_humans(tmp_path):
+    current = context()
+    current["allowed_actions"] += ["message", "revise"]
+    actions = []
+    dialogue = [
+        Decision(
+            type="message", message="Which payment tradeoff matters to your customer?", purpose="question"
+        ),
+        Decision(
+            type="message",
+            message="A lower upfront deposit matters most.",
+            purpose="answer",
+            reply_to_action_id="action-1",
+        ),
+        proposal(11500).model_copy(
+            update={"message": "€115 per chair with a 25% deposit.", "purpose": "explanation"}
+        ),
+        Decision(
+            type="message",
+            message="Could 20% deposit be worth a slightly higher price?",
+            purpose="tradeoff",
+            reply_to_action_id="action-3",
+        ),
+        proposal(11750).model_copy(
+            update={
+                "type": "revise",
+                "terms": proposal(11750).terms.model_copy(update={"deposit_percent": 20}),
+                "message": "€117.50 with a 20% deposit lowers the upfront payment.",
+                "purpose": "explanation",
+            }
+        ),
+        Decision(type="accept", offer_id="offer-5"),
+    ]
+
+    class Adapter:
+        def __init__(self, cfg, role, directory):
+            self.role = role
+
+        def verify_identity(self):
+            pass
+
+        def room(self):
+            return copy.deepcopy(current)
+
+        def context(self):
+            value = self.room()
+            value["role"] = self.role
+            value["private_rules"] = context(self.role)["private_rules"]
+            value["private_brief"] = {"version": 1, "goals": f"{self.role}-private-goal", "requirements": []}
+            value["human_questions"] = []
+            return value
+
+        def claim(self):
+            return {"expected_version": current["version"], "claim_token": "private-claim-token"}
+
+        def act(self, payload, key):
+            actions.append(payload)
+            public = {
+                field: payload[field]
+                for field in ("message", "purpose", "reply_to_action_id", "image_ids")
+                if field in payload
+            }
+            if payload["type"] in ("propose", "revise"):
+                offer = {
+                    "id": f"offer-{len(actions)}",
+                    "sender": self.role,
+                    "terms": {
+                        **payload["terms"],
+                        "total": payload["terms"]["unit_price"] * 8 + 24000,
+                        "delivery_charge": 24000,
+                    },
+                }
+                current["offers"].append(offer)
+                current["current_offer"] = offer
+                public["offer_id"] = offer["id"]
+            current["activity"].append(
+                {
+                    "id": f"action-{len(actions)}",
+                    "role": self.role,
+                    "type": payload["type"],
+                    "data": public,
+                    "at": f"2026-10-10T10:00:0{len(actions)}Z",
+                }
+            )
+            current["version"] += 1
+            current["next_role"] = "seller" if self.role == "buyer" else "buyer"
+            if payload["type"] == "accept":
+                current["state"] = "awaiting_approval"
+
+    class Agent:
+        def __init__(self, account, role, client, journal):
+            self.role, self.journal = role, journal
+
+        def decide(self, value):
+            assert value["private_brief"]["goals"] == f"{self.role}-private-goal"
+            self.journal.state["model_calls"] += 1
+            return dialogue[len(actions)]
+
+    journal = Journal(tmp_path, "room-1")
+    settings = {**guidance_config(tmp_path), "max_model_calls": 8}
+    result = run_deepagents(settings, journal, adapter=Adapter, participant=Agent)
+    assert result["api_state"] == "awaiting_approval" and result["model_calls"] == 6
+    assert [action["type"] for action in actions] == [
+        "message",
+        "message",
+        "propose",
+        "message",
+        "revise",
+        "accept",
+    ]
+    text = (tmp_path / "buyer.jsonl").read_text()
+    assert (
+        "lowers the upfront payment" in text
+        and "seller-private-goal" not in text
+        and "buyer-private-goal" not in text
+    )
+    assert result["current_terms"]["total"] == 118000
+    assert result["current_terms"]["deposit_percent"] == 20
+
+
+def test_private_owner_question_stops_without_leaking_to_public_battle(tmp_path):
+    state = context()
+    question = "PRIVATE: prioritize the smaller deposit or lower total?"
+    submitted = []
+
+    class Adapter:
+        def __init__(self, *args):
+            pass
+
+        def verify_identity(self):
+            pass
+
+        def room(self):
+            return copy.deepcopy(state)
+
+        context = room
+
+        def claim(self):
+            return {"expected_version": state["version"], "claim_token": "private-claim"}
+
+        def act(self, payload, key):
+            submitted.append(payload)
+            state["human_questions"] = [{"question": payload["human_question"], "status": "pending"}]
+            state["activity"] = [
+                {"id": "review", "role": "seller", "type": "request_human_review", "data": {}}
+            ]
+            state["state"] = "needs_human_review"
+
+    class Agent:
+        def __init__(self, *args):
+            pass
+
+        def decide(self, value):
+            return Decision(type="request_human_review", human_question=question)
+
+    journal = Journal(tmp_path, "room-1")
+    result = run_deepagents(guidance_config(tmp_path), journal, adapter=Adapter, participant=Agent)
+    assert result["api_state"] == "needs_human_review"
+    assert submitted[0]["human_question"] == question and "message" not in submitted[0]
+    assert "PRIVATE" not in (tmp_path / "buyer.jsonl").read_text()

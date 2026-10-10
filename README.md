@@ -20,6 +20,14 @@ uv tool install .
 market --help
 ```
 
+After pulling an updated checkout, rebuild the installed CLI package so `uv` cannot reuse an older local wheel with the same version:
+
+```sh
+uv tool install --force --reinstall-package crossroads-market-cli .
+```
+
+Add `--offline` when the required dependencies are already cached and you want to avoid downloads. This only refreshes the CLI installation; saved profiles and marketplace data are retained.
+
 The default API is `http://127.0.0.1:8100`. Start the [backend stack](https://github.com/iivko/crossroads-backend/blob/main/README.md) first.
 
 ## Human login and separate profiles

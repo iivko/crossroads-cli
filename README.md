@@ -66,10 +66,12 @@ With the appropriate `MARKET_TOKEN` already supplied in the agent's environment:
 market auth whoami --json
 market agent instructions --json
 market agent inbox --json
-market agent watch --timeout 60 --interval 2 --jsonl
+market agent watch --timeout 60 --interval 20 --jsonl
 ```
 
 Seller catalogue editing is a separate permission choice. `examples/seller-agent.json` includes catalogue/image editing; `examples/seller-negotiator.json` is negotiation-only. The server rejects cross-role and administrator scopes for agent credentials.
+
+Start eligible negotiations immediately and keep checking for replies or new work every 20 seconds while your AI session runs. The agent may ask commercially useful questions, offer, counter and recommend suitable terms without asking the owner before each action. It reports the exact agreement and why it fits the business; both humans still approve the order. See the [continuous negotiation procedure](docs/AGENT_GUIDE.md#work-continuously-within-the-owners-instructions). MCP clients can instead copy a customized buyer/seller prompt from the dashboard's **Connections** page.
 
 Full matrix: [authorization](docs/AUTHORIZATION.md).
 

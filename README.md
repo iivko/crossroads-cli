@@ -126,7 +126,7 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 - A new action needs the current room version and claim token. Fetch context and handle 409 explicitly; the CLI never silently retries against newer terms.
 - Dashboard **Negotiate more** instructions are private to the human's role. External runtimes must keep watching or restart; the dashboard never launches their provider. Read own `human_guidance`, act within the hard limits, and include the pending instruction's `id` as `guidance_id`. See the [agent guide](docs/AGENT_GUIDE.md#human-instructions-and-another-attempt).
 - Product/stock/gallery edits fetch a version if you do not supply one. The server still rejects concurrent changes. Rules require an explicit expected policy version.
-- Remote API URLs require HTTPS; plain HTTP is permitted only for loopback and the local Compose API hostname.
+- Remote API URLs require HTTPS by default. For a trusted LAN demo, set `MARKET_ALLOW_LAN_HTTP=true` and use a literal private IPv4 address (10/8, 172.16/12 or 192.168/16), such as `MARKET_API_URL=http://192.168.1.50:8100`. Public HTTP, arbitrary hostnames and link-local addresses remain blocked. Loopback and the local Compose API hostname continue to work without an opt-in. HTTP is unencrypted; use demo accounts on a trusted network only. See the [team LAN guide](https://github.com/iivko/crossroads-backend/blob/main/docs/LAN_TEAM_GUIDE.md).
 - Invalid API envelopes, mismatched HTTP/body status codes and non-JSON proxy errors produce a safe `invalid_response` error with exit code 1. Update the CLI alongside the API when changing its response contract; the CLI does not silently accept the old unwrapped HTTP format.
 
 | Exit code | Meaning |
@@ -139,7 +139,7 @@ Files must be within `MARKET_MEDIA_ROOT`, defaulting to the current directory. T
 | 5 | Conflict: stale version, wrong turn, active claim or unavailable image |
 | 6 | Network failure; mutation error includes a retry key |
 
-Environment variables: `MARKET_API_URL`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARKET_WORKSPACE`, `MARKET_CONFIG`, `MARKET_MEDIA_ROOT`; `MARKET_PASSWORD` is for user login only.
+Environment variables: `MARKET_API_URL`, `MARKET_ALLOW_LAN_HTTP`, `MARKET_PROFILE`, `MARKET_TOKEN`, `MARKET_WORKSPACE`, `MARKET_CONFIG`, `MARKET_MEDIA_ROOT`; `MARKET_PASSWORD` is for user login only.
 
 ## Documentation and tests
 

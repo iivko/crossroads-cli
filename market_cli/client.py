@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -9,6 +10,19 @@ from uuid import uuid4
 import httpx
 
 from .responses import response_contract
+
+
+def trusted_lan_http(hostname):
+    """Explicit opt-in for literal RFC1918 IPv4 addresses, never arbitrary hosts."""
+    if os.environ.get("MARKET_ALLOW_LAN_HTTP", "").strip().lower() != "true":
+        return False
+    try:
+        address = IPv4Address(hostname)
+    except ValueError:
+        return False
+    return any(
+        address in IPv4Network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    )
 
 
 class CLIError(Exception):
@@ -71,8 +85,17 @@ class Client:
             raise CLIError(
                 "invalid_url", "Use an HTTP(S) API URL without embedded credentials, query or fragment", 2
             )
-        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1", "api"):
-            raise CLIError("insecure_url", "Remote API connections require HTTPS", 2)
+        if (
+            parsed.scheme == "http"
+            and parsed.hostname not in ("localhost", "127.0.0.1", "::1", "api")
+            and not trusted_lan_http(parsed.hostname)
+        ):
+            raise CLIError(
+                "insecure_url",
+                "Remote API connections require HTTPS. For a trusted LAN demo only, set "
+                "MARKET_ALLOW_LAN_HTTP=true and use a private IPv4 address.",
+                2,
+            )
         self.base_url = self.base_url.rstrip("/")
         if not self.base_url.endswith("/api/v1"):
             self.base_url += "/api/v1"
